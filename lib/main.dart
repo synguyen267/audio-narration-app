@@ -12,6 +12,7 @@ import 'services/geofence_engine.dart';
 import 'services/location_service.dart';
 import 'services/narration_engine.dart';
 import 'ui/location_banner.dart';
+import 'ui/poi_map.dart';
 
 void main() {
   runApp(const NarrationApp());
@@ -47,10 +48,13 @@ class _PoiListScreenState extends State<PoiListScreen> {
   );
 
   late final Future<List<Poi>> _pois;
-  List<Poi> _poiList = []; // bản sao để Geofence Engine dùng
+  List<Poi> _poiList = []; // dùng cho Geofence Engine và bản đồ
   StreamSubscription<Position>? _sub;
   LocationStatus? _status;
   Position? _position;
+
+  /// Tab đang mở: 0 = danh sách, 1 = bản đồ.
+  int _tab = 0;
 
   /// Khi khác null: đang giả lập có mặt tại POI này (để thử không cần đi).
   Poi? _simulatedAt;
@@ -59,7 +63,7 @@ class _PoiListScreenState extends State<PoiListScreen> {
   void initState() {
     super.initState();
     _pois = PoiDatabase.getAll('vi').then((list) {
-      _poiList = list;
+      if (mounted) setState(() => _poiList = list);
       return list;
     });
     _startLocation();
@@ -110,6 +114,13 @@ class _PoiListScreenState extends State<PoiListScreen> {
     return null;
   }
 
+  /// Id của POI gần nhất với vị trí hiện tại (để bản đồ nhấn mạnh).
+  int? get _nearestPoiId {
+    final point = _currentPoint;
+    if (point == null) return null;
+    return _geofence.nearest(_poiList, point.lat, point.lng)?.poi.id;
+  }
+
   @override
   void dispose() {
     _sub?.cancel();
@@ -124,7 +135,7 @@ class _PoiListScreenState extends State<PoiListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Danh sách điểm thuyết minh'),
+        title: const Text('Điểm thuyết minh'),
         actions: [
           IconButton(
             tooltip: 'Dừng thuyết minh',
@@ -166,55 +177,80 @@ class _PoiListScreenState extends State<PoiListScreen> {
             ),
           const Divider(height: 1),
           Expanded(
-            child: FutureBuilder<List<Poi>>(
-              future: _pois,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (snapshot.hasError) {
-                  return Center(child: Text('Lỗi: ${snapshot.error}'));
-                }
-                final point = _currentPoint;
-                final items = (snapshot.data ?? [])
-                    .map((p) => (
-                          poi: p,
-                          distance: point == null
-                              ? null
-                              : distanceMeters(
-                                  point.lat, point.lng, p.lat, p.lng),
-                        ))
-                    .toList();
-                if (point != null) {
-                  items.sort((a, b) => a.distance!.compareTo(b.distance!));
-                }
-                return ListView.builder(
-                  itemCount: items.length,
-                  itemBuilder: (context, i) {
-                    final poi = items[i].poi;
-                    final d = items[i].distance;
-                    return ListTile(
-                      leading: CircleAvatar(child: Text('${poi.priority}')),
-                      title: Text(poi.name),
-                      subtitle: Text(
-                        '${poi.lat}, ${poi.lng}  •  bán kính ${poi.radiusM} m',
-                      ),
-                      trailing: d == null
-                          ? null
-                          : Text(
-                              _formatDistance(d),
-                              style:
-                                  const TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                      onLongPress: () => _simulateAt(poi),
-                    );
-                  },
-                );
-              },
+            // IndexedStack giữ nguyên trạng thái bản đồ khi chuyển tab.
+            child: IndexedStack(
+              index: _tab,
+              children: [
+                _buildList(),
+                PoiMap(
+                  pois: _poiList,
+                  me: _currentPoint,
+                  highlightId: _nearestPoiId,
+                  onLongPressPoi: _simulateAt,
+                ),
+              ],
             ),
           ),
         ],
       ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.list), label: 'Danh sách'),
+          NavigationDestination(
+            icon: Icon(Icons.map_outlined),
+            label: 'Bản đồ',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildList() {
+    return FutureBuilder<List<Poi>>(
+      future: _pois,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: Text('Lỗi: ${snapshot.error}'));
+        }
+        final point = _currentPoint;
+        final items = (snapshot.data ?? [])
+            .map((p) => (
+                  poi: p,
+                  distance: point == null
+                      ? null
+                      : distanceMeters(point.lat, point.lng, p.lat, p.lng),
+                ))
+            .toList();
+        if (point != null) {
+          items.sort((a, b) => a.distance!.compareTo(b.distance!));
+        }
+        return ListView.builder(
+          itemCount: items.length,
+          itemBuilder: (context, i) {
+            final poi = items[i].poi;
+            final d = items[i].distance;
+            return ListTile(
+              leading: CircleAvatar(child: Text('${poi.priority}')),
+              title: Text(poi.name),
+              subtitle: Text(
+                '${poi.lat}, ${poi.lng}  •  bán kính ${poi.radiusM} m',
+              ),
+              trailing: d == null
+                  ? null
+                  : Text(
+                      _formatDistance(d),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+              onLongPress: () => _simulateAt(poi),
+            );
+          },
+        );
+      },
     );
   }
 }
