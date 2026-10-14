@@ -30,7 +30,7 @@ void main() {
       final far = makePoi(2, dLat: 0.01); // ~1112 m
       final result = engine.poisInRange([near, far], userLat, userLng);
 
-      expect(result.map((m) => m.poi.id), [2]);
+      expect(result.map((m) => m.poi.id), [1]);
     });
 
     test('POI nằm ngoài bán kính của chính nó thì bị loại', () {
