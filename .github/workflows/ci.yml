@@ -1,0 +1,28 @@
+name: CI
+
+# Chạy mỗi lần push lên GitHub hoặc mở Pull Request.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Lấy code về máy chủ của GitHub
+      - uses: actions/checkout@v4
+
+      # 2. Cài Flutter
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 3. Tải thư viện của dự án
+      - run: flutter pub get
+
+      # 4. Kiểm tra lỗi và cảnh báo trong code
+      - run: flutter analyze
+
+      # 5. Chạy toàn bộ unit test
+      - run: flutter test
