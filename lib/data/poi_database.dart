@@ -10,7 +10,12 @@ class PoiDatabase {
   static Future<Database> get database async {
     if (_db != null) return _db!;
     final path = p.join(await getDatabasesPath(), 'narration.db');
-    _db = await openDatabase(path, version: 1, onCreate: _onCreate);
+    _db = await openDatabase(
+      path,
+      version: 2,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+    );
     return _db!;
   }
 
@@ -40,7 +45,34 @@ class PoiDatabase {
         UNIQUE (poi_id, lang)
       )
     ''');
+    await _createPlayLog(db);
     await _seedSamples(db);
+  }
+
+  /// v1 -> v2: thêm bảng play_log mà không mất dữ liệu cũ.
+  static Future<void> _onUpgrade(
+      Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createPlayLog(db);
+    }
+  }
+
+  static Future<void> _createPlayLog(Database db) async {
+    await db.execute('''
+      CREATE TABLE play_log (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        poi_id       INTEGER NOT NULL,
+        lang         TEXT NOT NULL,
+        source       TEXT NOT NULL,          -- 'audio' hoặc 'tts'
+        trigger      TEXT NOT NULL,          -- 'gps' hoặc 'qr'
+        played_at    TEXT NOT NULL,          -- ISO-8601
+        duration_sec INTEGER,                -- thời gian nghe thực tế
+        completed    INTEGER NOT NULL DEFAULT 0,
+        synced       INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX idx_play_log_poi_time ON play_log (poi_id, played_at)');
   }
 
   // DỮ LIỆU MẪU: tọa độ gần đúng, chỉ để thử. Sẽ thay bằng tọa độ thật.
@@ -100,5 +132,58 @@ class PoiDatabase {
       ORDER BY p.priority DESC
     ''', [lang]);
     return rows.map(Poi.fromMap).toList();
+  }
+
+  // ---------------------------------------------------------------
+  // play_log
+  // ---------------------------------------------------------------
+
+  /// Ghi một lượt phát. Trả về id của dòng log (để cập nhật thời lượng sau).
+  static Future<int> insertPlayLog({
+    required int poiId,
+    required String lang,
+    required String source, // 'audio' | 'tts'
+    required String trigger, // 'gps' | 'qr'
+    DateTime? playedAt,
+  }) async {
+    final db = await database;
+    return db.insert('play_log', {
+      'poi_id': poiId,
+      'lang': lang,
+      'source': source,
+      'trigger': trigger,
+      'played_at': (playedAt ?? DateTime.now()).toIso8601String(),
+    });
+  }
+
+  /// Cập nhật khi phát xong hoặc bị ngắt: nghe được bao nhiêu giây.
+  static Future<void> finishPlayLog(
+    int logId, {
+    required int durationSec,
+    required bool completed,
+  }) async {
+    final db = await database;
+    await db.update(
+      'play_log',
+      {'duration_sec': durationSec, 'completed': completed ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [logId],
+    );
+  }
+
+  /// Lần gần nhất POI này được phát (null nếu chưa từng).
+  /// Dùng để kiểm tra "đã phát trong X phút chưa?".
+  static Future<DateTime?> lastPlayedAt(int poiId) async {
+    final db = await database;
+    final rows = await db.query(
+      'play_log',
+      columns: ['played_at'],
+      where: 'poi_id = ?',
+      whereArgs: [poiId],
+      orderBy: 'played_at DESC',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return DateTime.parse(rows.first['played_at'] as String);
   }
 }
